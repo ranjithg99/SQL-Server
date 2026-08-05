@@ -1,0 +1,25 @@
+
+ALTER DATABASE WK_Test SET RECOVERY FULL;
+
+GO
+
+
+
+-- 2. Execute a Native Full Backup directly to your local drive
+
+-- (This creates a single, highly compressed .bak disaster recovery file)
+
+BACKUP DATABASE WK_Test
+TO DISK = 'C:\Temp\WK_Test_Full.bak'
+WITH FORMAT, MEDIANAME = 'Local_DR_Testing', NAME = 'Full Backup of WK_Test';
+GO
+
+ 
+
+-- 3. Execute a Transaction Log Backup (Like backing up your Oracle Archive Logs)
+
+BACKUP LOG WK_Test
+TO DISK = 'C:\Temp\WK_Test_Log.trn'
+WITH NOFORMAT, NAME = 'Log Backup of WK_Test';
+
+GO
