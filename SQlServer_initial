@@ -1,0 +1,87 @@
+use Wk_test;
+go
+
+waitfor delay '00:00:06';
+
+select id, Incidentcode, details from [dbo].[IncidentLog]
+where Details like '%Wolters%' order by id desc;
+
+go
+
+
+
+select * from [dbo].[IncidentLog];
+
+Select * from sys.dm_exec_requests;
+
+ALTER DATABASE WK_Test SET RECOVERY FULL;
+
+GO
+
+------------
+
+
+
+
+1. Create the database container from scratch
+
+CREATE DATABASE WK_Test;
+
+GO
+
+ 
+
+-- 2. Tell SSMS to use this new database
+
+USE WK_Test;
+
+GO
+
+ 
+
+-- 3. Turn on the Query Store tracking engine
+
+ALTER DATABASE WK_Test SET QUERY_STORE = ON (OPERATION_MODE = READ_WRITE);
+
+GO
+
+ 
+
+-- 4. Create the table under the default 'dbo' schema
+
+CREATE TABLE dbo.IncidentLog (
+
+    ID INT IDENTITY(1,1) PRIMARY KEY,
+
+    IncidentCode VARCHAR(50),
+
+    Details VARCHAR(max)
+
+);
+
+GO
+
+ 
+
+-- 5. Populates it with 50,000 rows of data to test performance
+
+INSERT INTO dbo.IncidentLog (IncidentCode, Details)
+
+SELECT TOP 50000
+
+    'ERR-' + CAST((ROW_NUMBER() OVER(ORDER BY a.object_id)) AS VARCHAR),
+
+    'Critical Incident Alert for Wolters Kluwer Account'
+
+FROM sys.all_objects a CROSS JOIN sys.all_objects b;
+
+GO
+
+Use code with caution.
+
+🔍 How to Verify It Worked
+
+Once the message at the bottom says "Query executed successfully", go to your left sidebar (Object Explorer): [1, 2]
+
+Right-click the Databases folder and select Refresh.
+Expand Databases ➔ Expand WK_Test ➔ Expand Tables. You will see dbo.IncidentLog sitting there perfectly!
