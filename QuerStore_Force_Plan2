@@ -1,0 +1,97 @@
+USE WK_Performance_Lab;
+GO
+
+-- Enable Query Store if not already on
+ALTER DATABASE WK_Performance_Lab SET QUERY_STORE = ON;
+GO
+
+-- Clear old Query Store data so your test data is clean
+ALTER DATABASE WK_Performance_Lab SET QUERY_STORE CLEAR;
+GO
+
+
+-- Create a test table
+CREATE TABLE dbo.OrderHistory (
+    OrderID INT IDENTITY(1,1) PRIMARY KEY,
+    CustomerType VARCHAR(20),
+    OrderDetails CHAR(4000) DEFAULT 'Details' -- Widens the row size
+);
+
+Select * from  dbo.OrderHistory;
+Select * from  dbo.OrderHistory where CustomerType = 'VIP';
+
+-- Insert 100,000 rows for 'Standard' customers
+INSERT INTO dbo.OrderHistory (CustomerType) 
+SELECT TOP (100000) 'Standard' 
+FROM sys.all_objects a 
+CROSS JOIN sys.all_objects b;
+
+
+
+-- Insert only 2 rows for 'VIP' customers
+INSERT INTO dbo.OrderHistory (CustomerType) VALUES ('VIP');
+INSERT INTO dbo.OrderHistory (CustomerType) VALUES ('VIP');
+
+-- Create a non-clustered index on CustomerType
+CREATE INDEX IX_CustomerType ON dbo.OrderHistory(CustomerType);
+GO
+
+CREATE STATISTICS [_dta_stat_1221579390_1_2] ON [dbo].[OrderHistory]([OrderID], [CustomerType])
+WITH AUTO_DROP = OFF ;
+
+
+
+-- Execute with the 'VIP' parameter to generate a fast Index Seek plan
+EXEC sp_executesql 
+    N'SELECT OrderID, CustomerType FROM dbo.OrderHistory WHERE CustomerType = @Type',
+    N'@Type VARCHAR(20)',
+    @Type = 'VIP';
+GO 20 
+
+-- Runs it 20 times to build history in Query Store
+
+
+-- Clear the active plan cache to force a recompile
+ALTER DATABASE SCOPED CONFIGURATION CLEAR PROCEDURE_CACHE;
+GO
+
+-- Run with 'Standard'. This forces a heavy Clustered Index Scan plan into cache
+EXEC sp_executesql 
+    N'SELECT OrderID, CustomerType FROM dbo.OrderHistory WHERE CustomerType = @Type',
+    N'@Type VARCHAR(20)',
+    @Type = 'Standard';
+GO
+
+-- 🚨 THE INCIDENT: The VIP query is now trapped using the slow Scan plan!
+EXEC sp_executesql 
+    N'SELECT OrderID, CustomerType FROM dbo.OrderHistory WHERE CustomerType = @Type',
+    N'@Type VARCHAR(20)',
+    @Type = 'VIP';
+GO
+
+-- This will run instantly, resolving the P1 incident overhead
+EXEC sp_executesql 
+    N'SELECT OrderID, CustomerType FROM dbo.OrderHistory WHERE CustomerType = @Type',
+    N'@Type VARCHAR(20)',
+    @Type = 'VIP';
+GO
+
+
+
+-- Find the Query ID and Plan IDs in Query Store
+SELECT 
+    q.query_id,
+    p.plan_id,
+    p.is_forced_plan,
+    qt.query_sql_text,
+    p.last_execution_time
+FROM sys.query_store_query q
+JOIN sys.query_store_query_text qt ON q.query_text_id = qt.query_text_id
+JOIN sys.query_store_plan p ON q.query_id = p.query_id
+WHERE qt.query_sql_text LIKE '%VIP%';
+
+
+EXEC sp_query_store_force_plan @query_id = 62, @plan_id = 62;
+GO
+
+
