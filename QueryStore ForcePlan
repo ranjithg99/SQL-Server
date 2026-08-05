@@ -1,0 +1,71 @@
+Select * from sys.dm_exec_requests;
+
+GO
+
+
+
+Select * from sys.query_store_plan;
+Select * from sys.database_query_store_options;
+
+
+SELECT
+
+    q.query_id,
+
+    p.plan_id,
+
+    p.is_forced_plan,
+
+    rs.avg_duration / 1000000.0 AS avg_duration_seconds,
+
+    rs.avg_cpu_time / 1000000.0 AS avg_cpu_seconds
+
+FROM sys.query_store_query q
+
+JOIN sys.query_store_plan p ON q.query_id = p.query_id
+
+JOIN sys.query_store_runtime_stats rs ON p.plan_id = rs.plan_id
+
+WHERE q.query_id = 45;
+
+ 
+
+USE WK_Test
+
+GO
+
+ 
+
+EXEC sp_query_store_force_plan
+
+    @query_id = 57,   -- The ID of the financial report query
+
+    @plan_id = 8;   -- The historical, fast Plan ID
+
+GO
+
+ 
+
+ 
+
+SELECT query_id, plan_id, is_forced_plan
+
+FROM sys.query_store_plan
+
+WHERE query_id = 45;
+
+ 
+
+SELECT
+
+    query_id,
+
+    plan_id,
+
+    is_forced_plan,
+
+    force_failure_count
+
+FROM sys.query_store_plan
+
+WHERE query_id = 1234; -- Replace with your Query ID
