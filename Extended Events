@@ -1,0 +1,95 @@
+-- 1. Create a dedicated test database
+CREATE DATABASE [WK_Performance_Lab];
+
+
+GO
+-- 2. Set to FULL recovery to ensure proper transaction log testing
+ALTER DATABASE [WK_Performance_Lab]
+    SET RECOVERY FULL;
+
+
+GO
+USE [WK_Performance_Lab];
+
+
+GO
+-- 3. Enable Query Store with aggressive capture parameters for testing
+ALTER DATABASE [WK_Performance_Lab]
+    SET QUERY_STORE = ON(OPERATION_MODE = READ_WRITE, CLEANUP_POLICY = (STALE_QUERY_THRESHOLD_DAYS = 30), DATA_FLUSH_INTERVAL_SECONDS = 60, -- Flush data to disk every 1 minute instead of 15
+        MAX_STORAGE_SIZE_MB = 100, INTERVAL_LENGTH_MINUTES = 5, -- Aggregate performance data every 5 minutes
+        SIZE_BASED_CLEANUP_MODE = AUTO, QUERY_CAPTURE_MODE = ALL); -- Capture absolutely every query executed
+
+
+        -- 1. Drop the session if it already exists to avoid creation conflicts
+
+IF EXISTS (SELECT * FROM sys.server_event_sessions WHERE name = 'CIS_HighSLA_Telemetry')
+
+    DROP EVENT SESSION [CIS_HighSLA_Telemetry] ON SERVER;
+
+GO
+
+ 
+
+
+-- 2. Create the unified telemetry session 
+CREATE EVENT SESSION [CIS_HighSLA_Telemetry] 
+ON SERVER 
+-- EVENT A: Capture High CPU & High I/O Batch Completions 
+ADD EVENT sqlserver.sql_batch_completed( 
+    ACTION(sqlserver.client_app_name, sqlserver.database_name, sqlserver.sql_text, sqlserver.nt_username) 
+    WHERE ( 
+        [sqlserver].[database_name] = N'WK_Performance_Lab' -- Target your lab 
+        AND ( 
+            duration >= 2000000 -- Long running (>= 2 seconds) 
+            OR cpu_time >= 1000000 -- High CPU (>= 1 second) 
+            OR logical_reads >= 10000 -- High I/O bottleneck 
+        ) 
+    ) 
+), 
+-- EVENT B: Capture Live Deadlocks with the full XML Graph 
+ADD EVENT sqlserver.xml_deadlock_report( 
+    ACTION(sqlserver.client_app_name, sqlserver.database_name, sqlserver.sql_text) 
+) 
+-- TARGET BUFFER: Stream data asynchronously to a physical file on your laptop 
+ADD TARGET package0.event_file( 
+    SET filename = N'C:\SQL_Backups\CIS_Telemetry.xel', -- Ensure C:\SQL_Backups folder exists! 
+    max_file_size = (5), -- 5 MB file size limit 
+    max_rollover_files = (2) -- Keep 2 rollover archive files 
+) 
+WITH ( 
+    MAX_MEMORY = 4096 KB, -- In-memory staging buffer size 
+    EVENT_RETENTION_MODE = ALLOW_SINGLE_EVENT_LOSS, -- 🛠️ FIXED: Changed from ASYNCHRONOUS_BUFFER
+    MAX_DISPATCH_LATENCY = 5 SECONDS, -- Stream to disk every 5 seconds 
+    MEMORY_PARTITION_MODE = NONE, 
+    TRACK_CAUSALITY = OFF, 
+    STARTUP_STATE = ON -- Auto-start when server reboots 
+);
+
+
+
+SELECT   event_data.value('(event/@name)[1]', 'VARCHAR(50)') AS [Event_Type],
+         event_data.value('(event/@timestamp)[1]', 'DATETIME2') AS [Execution_Timestamp],
+         event_data.value('(event/action[@name="database_name"]/value)[1]', 'VARCHAR(100)') AS [Database_Name],
+         event_data.value('(event/data[@name="duration"]/value)[1]', 'BIGINT') / 1000000.0 AS [Duration_Seconds],
+         event_data.value('(event/data[@name="cpu_time"]/value)[1]', 'BIGINT') / 1000000.0 AS [CPU_Seconds],
+         event_data.value('(event/data[@name="logical_reads"]/value)[1]', 'BIGINT') AS [Logical_Reads],
+         event_data.value('(event/action[@name="sql_text"]/value)[1]', 'VARCHAR(MAX)') AS [T_SQL_Statement]
+FROM     (SELECT CAST (event_data AS XML) AS event_data
+          FROM   sys.fn_xe_file_target_read_file('C:\SQL_Backups\CIS_Telemetry*.xel', NULL, NULL, NULL)) AS [XML_Data]
+ORDER BY [Execution_Timestamp] DESC;
+
+
+ALTER EVENT SESSION [CIS_HighSLA_Telemetry] ON SERVER STATE = START;
+
+ALTER EVENT SESSION [CIS_HighSLA_Telemetry] ON SERVER STATE = STOP;
+
+
+
+USE WK_Performance_Lab;
+GO
+-- Forces a 3-second delay to trigger your 'duration >= 2000000' filter
+WAITFOR DELAY '00:00:03'; 
+
+SELECT * FROM sys.dm_xe_sessions WHERE name = 'CIS_HighSLA_Telemetry';
+
+
