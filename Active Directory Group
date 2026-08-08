@@ -1,0 +1,147 @@
+
+PS C:\Windows\system32>
+>> New-LocalGroup -Name "DB_App_Developers" -Description "SQL Server Application Developers Group"
+
+Name              Description
+----              -----------
+DB_App_Developers SQL Server Application Developers Group
+
+
+PS C:\Windows\system32>
+
+
+
+
+-- Find the Query ID and Plan IDs in Query Store
+SELECT 
+    q.query_id,
+    p.plan_id,
+    p.is_forced_plan,
+    qt.query_sql_text,
+    p.last_execution_time
+FROM sys.query_store_query q
+JOIN sys.query_store_query_text qt ON q.query_text_id = qt.query_text_id
+JOIN sys.query_store_plan p ON q.query_id = p.query_id
+WHERE qt.query_sql_text LIKE '%VIP%';
+
+
+EXEC sp_query_store_force_plan @query_id = 62, @plan_id = 62;
+GO
+
+
+Select * from sys.dm_exec_requests where blocking_session_id <> 0;
+
+go
+
+SELECT 
+    ag.name AS [AG Name],
+    ar.replica_server_name AS [Replica],
+    db_name(dr_state.database_id) AS [Database],
+    dr_state.synchronization_state_desc AS [Sync State],
+    dr_state.synchronization_health_desc AS [Health],
+    dr_state.log_send_queue_size AS [Log Send Queue (KB)],
+    dr_state.redo_queue_size AS [Redo Queue (KB)]
+FROM sys.dm_hadr_database_replica_states dr_state
+JOIN sys.availability_replicas ar ON dr_state.replica_id = ar.replica_id
+JOIN sys.availability_groups ag ON ar.group_id = ag.group_id
+ORDER BY ag.name, ar.replica_server_name;
+
+SELECT 
+    primary_server AS [Primary Server],
+    primary_database AS [Primary DB],
+    secondary_server AS [Secondary Server],
+    secondary_database AS [Secondary DB],
+    last_copied_file AS [Last Copied File],
+    last_restored_file AS [Last Restored File],
+    DATEDIFF(minute, last_restored_date, GETDATE()) AS [Minutes Since Last Restore]
+FROM msdb.dbo.log_shipping_monitor_secondary;
+
+select * from sys.dm_exec_query_stats;
+
+SELECT TOP 10
+    qs.execution_count AS [Execution Count],
+    SUBSTRING(st.text, (qs.statement_start_offset/2)+1, 
+        ((CASE qs.statement_end_offset 
+            WHEN -1 THEN DATALENGTH(st.text) 
+            ELSE qs.statement_end_offset 
+          END - qs.statement_start_offset)/2) + 1) AS [Query Text],
+    qp.query_plan AS [Execution Plan]
+FROM sys.dm_exec_query_stats qs
+CROSS APPLY sys.dm_exec_sql_text(qs.sql_handle) st
+CROSS APPLY sys.dm_exec_query_plan(qs.plan_handle) qp
+WHERE qp.query_plan.value('declare namespace p="http://microsoft.com";max(//p:IndexLookUp/@Lookup)', 'varchar(max)') IS NOT NULL
+ORDER BY qs.total_worker_time DESC;
+
+-- Create a server-level login mapped directly to the AD Security Group
+CREATE LOGIN [DESKTOP-PO8SVDF\DB_App_Developers] 
+FROM WINDOWS 
+WITH DEFAULT_DATABASE = [WK_Performance_Lab];
+
+
+USE [WK_Performance_Lab];
+GO
+
+-- Map the AD Group login to a database user
+CREATE USER [U19743_AD_Group_Name] 
+FOR LOGIN [DESKTOP-PO8SVDF\DB_App_Developers];
+GO
+
+
+USE [WK_Performance_Lab];
+GO
+
+-- Example A: Add the AD group user to a standard fixed database role (Read/Write)
+ALTER ROLE [db_datareader] ADD MEMBER [U19743_AD_Group_Name];
+ALTER ROLE [db_datawriter] ADD MEMBER [U19743_AD_Group_Name];
+GO
+
+-- Example B: Add the AD group user to a Custom Database Role
+ALTER ROLE INFORMATION_SCHEMA ADD MEMBER [U19743_AD_Group_Name];
+GO
+
+
+SELECT 
+    name AS [CustomRoleName],
+    principal_id AS [RoleId],
+    type_desc AS [Type],
+    create_date AS [CreateDate],
+    modify_date AS [ModifyDate]
+FROM 
+    sys.database_principals
+WHERE 
+    type = 'R'               -- Filter for Roles only
+    AND is_fixed_role = 0    -- Exclude built-in fixed database roles
+    AND name <> 'public';
+    
+    -- Create a new custom database role
+CREATE ROLE sps;
+GO
+
+
+-- Example A: Grant permission to execute all stored procedures
+GRANT EXECUTE TO sps;
+GO
+
+-- Example B: Grant permission to select data from all tables/views in a schema
+GRANT SELECT ON SCHEMA::[dbo] TO sps;
+GO
+
+-- Example C: Grant permissions on a specific table only
+GRANT SELECT, INSERT, UPDATE ON OBJECT::dbo.orderHistory TO sps;
+GO
+
+
+-- Add your AD Group user to the new custom role
+ALTER ROLE sps ADD MEMBER [U19743_AD_Group_Name];
+GO
+
+SELECT 
+    r.name AS [RoleName],
+    m.name AS [MemberName]
+FROM sys.database_principals r
+JOIN sys.database_role_members rm ON r.principal_id = rm.role_principal_id
+JOIN sys.database_principals m ON rm.member_principal_id = m.principal_id
+WHERE r.is_fixed_role = 0 AND r.name <> 'public';
+GO
+
+
