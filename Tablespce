@@ -1,0 +1,65 @@
+
+IF OBJECT_ID('tempdb..#StorageAudit') IS NOT NULL DROP TABLE #StorageAudit;
+
+CREATE TABLE #StorageAudit (
+    DatabaseName SYSNAME,
+    LogicalName SYSNAME,
+    PhysicalName VARCHAR(500),
+    FileType VARCHAR(10),
+    TotalSize_MB DECIMAL(18,2),
+    SpaceUsed_MB DECIMAL(18,2),
+    FreeSpace_MB DECIMAL(18,2),
+    FreeSpace_Percent DECIMAL(5,2)
+);
+
+EXEC sp_MSforeachdb '
+USE [?];
+INSERT INTO #StorageAudit
+SELECT 
+    DB_NAME() AS DatabaseName,
+    name AS LogicalName,
+    physical_name AS PhysicalName,
+    type_desc AS FileType,
+    CAST(size * 8.0 / 1024 AS DECIMAL(18,2)) AS TotalSize_MB,
+    CAST(FILEPROPERTY(name, ''SpaceUsed'') * 8.0 / 1024 AS DECIMAL(18,2)) AS SpaceUsed_MB,
+    CAST((size - FILEPROPERTY(name, ''SpaceUsed'')) * 8.0 / 1024 AS DECIMAL(18,2)) AS FreeSpace_MB,
+    CAST((size - FILEPROPERTY(name, ''SpaceUsed'')) * 100.0 / size AS DECIMAL(5,2)) AS FreeSpace_Percent
+FROM sys.database_files;';
+
+-- View comprehensive file storage report
+SELECT * FROM #StorageAudit
+ORDER BY DatabaseName, FileType, FreeSpace_Percent ASC;
+
+
+SELECT 
+    t.name AS [Table Name],
+    p.rows AS [Row Count],
+    CAST(SUM(a.total_pages) * 8.0 / 1024 AS DECIMAL(18,2)) AS [Total Space (MB)],
+    CAST(SUM(a.used_pages) * 8.0 / 1024 AS DECIMAL(18,2)) AS [Used Space (MB)],
+    CAST((SUM(a.total_pages) - SUM(a.used_pages)) * 8.0 / 1024 AS DECIMAL(18,2)) AS [Unallocated Space (MB)]
+FROM sys.tables t
+INNER JOIN sys.indexes i ON t.object_id = i.object_id
+INNER JOIN sys.partitions p ON i.object_id = p.object_id AND i.index_id = p.index_id
+INNER JOIN sys.allocation_units a ON p.partition_id = a.container_id
+WHERE t.is_ms_shipped = 0 AND i.object_id > 255
+GROUP BY t.name, p.rows
+ORDER BY [Total Space (MB)] DESC;
+
+
+SELECT 
+    OBJECT_NAME(p.object_id) AS [Table Name],
+    p.partition_number AS [Partition #],
+    fg.name AS [Filegroup Name],
+    p.rows AS [Row Count],
+    p.data_compression_desc AS [Compression Type],
+    CAST(SUM(a.total_pages) * 8.0 / 1024 AS DECIMAL(18,2)) AS [Partition Size (MB)]
+FROM sys.partitions p
+INNER JOIN sys.allocation_units a ON p.partition_id = a.container_id
+INNER JOIN sys.filegroups fg ON a.data_space_id = fg.data_space_id
+WHERE OBJECTPROPERTY(p.object_id, 'IsUserTable') = 1
+GROUP BY p.object_id, p.partition_number, fg.name, p.rows, p.data_compression_desc
+ORDER BY [Partition Size (MB)] DESC;
+
+
+
+
